@@ -1,0 +1,6 @@
+{
+  "name": "STOU Student Manager - ระบบบันทึกข้อมูลนักศึกษา มสธ.",
+  "description": "ระบบบันทึกและจัดการข้อมูลนักศึกษามหาวิทยาลัยสุโขทัยธรรมาธิราช (มสธ.) ค้นหา แก้ไขทันที ส่งออก Excel และ PDF พร้อมแดชบอร์ดสรุปผลและรองรับการใช้งานผ่านมือถือ/ไอแพด",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
