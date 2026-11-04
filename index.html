@@ -3,6 +3,76 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <script>
+      // Suppress harmless Vite HMR WebSocket errors in Cloud Run / iframe environment where HMR is disabled
+      (function() {
+        function shouldSuppress(msg) {
+          if (!msg) return false;
+          var str = String(msg);
+          return str.indexOf('WebSocket closed without opened') !== -1 ||
+                 str.indexOf('WebSocket error') !== -1 ||
+                 (str.indexOf('[vite]') !== -1 && str.indexOf('connection') !== -1);
+        }
+
+        window.addEventListener('error', function(event) {
+          var msg = event && (event.message || (event.error && event.error.message) || '');
+          var filename = (event && event.filename) || '';
+          if (shouldSuppress(msg) || filename.indexOf('@vite/client') !== -1) {
+            if (typeof event.stopImmediatePropagation === 'function') {
+              event.stopImmediatePropagation();
+            }
+            if (typeof event.preventDefault === 'function') {
+              event.preventDefault();
+            }
+            return true;
+          }
+        }, true);
+
+        window.addEventListener('unhandledrejection', function(event) {
+          var reason = event && (event.reason ? (event.reason.message || String(event.reason)) : '');
+          if (shouldSuppress(reason)) {
+            if (typeof event.stopImmediatePropagation === 'function') {
+              event.stopImmediatePropagation();
+            }
+            if (typeof event.preventDefault === 'function') {
+              event.preventDefault();
+            }
+          }
+        }, true);
+
+        var OrigWebSocket = window.WebSocket;
+        if (OrigWebSocket) {
+          try {
+            window.WebSocket = function(url, protocols) {
+              var isViteHmr = (typeof protocols === 'string' && protocols.indexOf('vite') !== -1) ||
+                              (Array.isArray(protocols) && protocols.some(function(p) { return p.indexOf('vite') !== -1; })) ||
+                              (typeof url === 'string' && url.indexOf('vite') !== -1);
+              var ws = new OrigWebSocket(url, protocols);
+              if (isViteHmr) {
+                ws.addEventListener('error', function(err) {
+                  if (err && typeof err.stopImmediatePropagation === 'function') {
+                    err.stopImmediatePropagation();
+                  }
+                });
+                ws.addEventListener('close', function(evt) {
+                  if (evt && typeof evt.stopImmediatePropagation === 'function') {
+                    evt.stopImmediatePropagation();
+                  }
+                });
+              }
+              return ws;
+            };
+            window.WebSocket.prototype = OrigWebSocket.prototype;
+            window.WebSocket.CONNECTING = OrigWebSocket.CONNECTING;
+            window.WebSocket.OPEN = OrigWebSocket.OPEN;
+            window.WebSocket.CLOSING = OrigWebSocket.CLOSING;
+            window.WebSocket.CLOSED = OrigWebSocket.CLOSED;
+          } catch (e) {
+            // ignore
+          }
+        }
+      })();
+    </script>
     <title>ระบบบันทึกสารสนเทศนักศึกษา มสธ. ลำปาง STOU Lampang Student Information Management System</title>
     <meta name="description" content="ระบบบันทึกสารสนเทศนักศึกษา มสธ. ลำปาง STOU Lampang Student Information Management System ศูนย์วิทยบริการและชุมชนสัมพันธ์ มสธ. ลำปาง" />
     <meta property="og:title" content="ระบบบันทึกสารสนเทศนักศึกษา มสธ. ลำปาง STOU Lampang Student Information Management System" />
