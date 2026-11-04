@@ -8,7 +8,7 @@ export type StudentStatus =
 export interface Student {
   id: string; // unique ID
   studentId: string; // 10 digits มสธ. e.g. "6630014523"
-  title: 'นาย' | 'นาง' | 'นางสาว' | 'ว่าที่ ร.ต.' | 'ดร.' | 'อื่นๆ';
+  title: string;
   firstName: string;
   lastName: string;
   faculty: string; // สาขาวิชา

@@ -155,6 +155,61 @@ export default function App() {
     showToast('AI นำเข้าข้อมูลเอกสารสำเร็จ กรุณาตรวจสอบและบันทึก');
   };
 
+  const handleBatchImportStudents = (newStudentsData: Partial<Student>[]) => {
+    const now = new Date().toISOString();
+    let addedCount = 0;
+    let updatedCount = 0;
+
+    setStudents((prev) => {
+      const updatedList = [...prev];
+      newStudentsData.forEach((s) => {
+        const cleanId = (s.studentId || '').replace(/\D/g, '');
+        const existingIndex = updatedList.findIndex(
+          (item) => item.studentId.replace(/\D/g, '') === cleanId
+        );
+
+        const studentRecord: Student = {
+          id: existingIndex >= 0 ? updatedList[existingIndex].id : `stou-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          studentId: s.studentId || '',
+          title: s.title || 'นาย',
+          firstName: s.firstName || '',
+          lastName: s.lastName || '',
+          faculty: s.faculty || 'สาขาวิชาวิทยาการจัดการ',
+          major: s.major || 'การจัดการทั่วไป',
+          stouCenter: DEFAULT_STOU_CENTER,
+          academicYear: s.academicYear || 2566,
+          entrySemester: 1,
+          phone: s.phone || '',
+          email: s.email || '',
+          lineId: s.lineId || '',
+          address: s.address || '',
+          subdistrict: s.subdistrict || '',
+          district: s.district || '',
+          province: s.province || 'ลำปาง',
+          postalCode: s.postalCode || '52000',
+          status: (s.status as any) || 'กำลังศึกษา',
+          notes: s.notes || '',
+          createdAt: existingIndex >= 0 ? updatedList[existingIndex].createdAt : now,
+          updatedAt: now,
+        };
+
+        if (existingIndex >= 0) {
+          updatedList[existingIndex] = studentRecord;
+          updatedCount++;
+        } else {
+          updatedList.unshift(studentRecord);
+          addedCount++;
+        }
+      });
+
+      return updatedList;
+    });
+
+    setIsAIScanModalOpen(false);
+    setCurrentTab('list');
+    showToast(`บันทึกข้อมูลนักศึกษาสำเร็จ ${addedCount + updatedCount} รายชื่อ (เพิ่มใหม่ ${addedCount}, อัปเดต ${updatedCount})`);
+  };
+
   const handleSaveStudent = (data: Partial<Student>) => {
     const now = new Date().toISOString();
 
@@ -375,6 +430,7 @@ export default function App() {
         isOpen={isAIScanModalOpen}
         onClose={() => setIsAIScanModalOpen(false)}
         onApplyData={handleApplyAIScanData}
+        onBatchImport={handleBatchImportStudents}
       />
 
       {/* Student Detail Card Modal */}

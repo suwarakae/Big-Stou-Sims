@@ -179,7 +179,7 @@ export const StudentList: React.FC<StudentListProps> = ({
             title="ถ่ายภาพหรืออัปโหลดรูปเอกสาร ให้ AI สแกนกรอกข้อมูลให้อัตโนมัติ"
           >
             <Camera className="w-4 h-4 text-emerald-200" />
-            <span className="hidden sm:inline">ถ่ายภาพ AI สแกน</span>
+            <span className="inline text-[11px] sm:text-xs">ถ่ายภาพ/สแกน</span>
             <Sparkles className="w-3.5 h-3.5 text-amber-300" />
           </button>
 

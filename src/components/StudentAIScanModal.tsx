@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Student, DEFAULT_STOU_CENTER } from '../types/student';
 import { 
   Camera, 
@@ -11,29 +11,123 @@ import {
   FileText, 
   RefreshCw,
   ArrowRight,
-  ShieldCheck
+  ShieldCheck,
+  Users,
+  Check,
+  SwitchCamera,
+  Layers,
+  MapPin,
+  FileCheck2
 } from 'lucide-react';
+import { formatStudentId } from '../utils/validation';
 
 interface StudentAIScanModalProps {
   isOpen: boolean;
   onClose: () => void;
   onApplyData: (extractedData: Partial<Student>) => void;
+  onBatchImport?: (students: Partial<Student>[]) => void;
 }
 
 export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
   isOpen,
   onClose,
   onApplyData,
+  onBatchImport,
 }) => {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [mimeType, setMimeType] = useState<string>('image/jpeg');
   const [isLoading, setIsLoading] = useState(false);
-  const [extractedData, setExtractedData] = useState<Partial<Student> | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const cameraInputRef = useRef<HTMLInputElement>(null);
 
-  if (!isOpen) return null;
+  // Extracted results (can be 1 or multiple students)
+  const [extractedStudents, setExtractedStudents] = useState<Partial<Student>[]>([]);
+  const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
+  const [documentType, setDocumentType] = useState<string>('single_document');
+
+  // Live Camera state for devices that support live stream
+  const [isLiveCameraOpen, setIsLiveCameraOpen] = useState(false);
+  const [cameraFacing, setCameraFacing] = useState<'environment' | 'user'>('environment');
+  const [liveStreamError, setLiveStreamError] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+
+  // Stop video stream when modal closes or unmounts
+  useEffect(() => {
+    if (!isOpen) {
+      stopLiveStream();
+      resetScan();
+    }
+  }, [isOpen]);
+
+  const stopLiveStream = () => {
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setIsLiveCameraOpen(false);
+  };
+
+  const startLiveStream = async (facing: 'environment' | 'user' = 'environment') => {
+    setLiveStreamError(null);
+    stopLiveStream();
+
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('เบราว์เซอร์นี้ไม่รองรับการเปิดกล้องแบบสด กรุณาใช้ปุ่ม "ถ่ายภาพด้วยกล้อง (Native Camera)"');
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: facing },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+        audio: false,
+      });
+
+      mediaStreamRef.current = stream;
+      setIsLiveCameraOpen(true);
+      setCameraFacing(facing);
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play().catch((e) => console.warn('Video play error:', e));
+      }
+    } catch (err: any) {
+      console.warn('Live camera stream failed:', err);
+      setLiveStreamError(
+        'ไม่สามารถเปิดกล้องสดได้ (อาจเนื่องจากสิทธิ์เบราว์เซอร์หรือการตั้งค่าความปลอดภัย) แนะนำให้ใช้ปุ่ม "ถ่ายภาพด้วยกล้องมือถือ/ไอแพด" ด้านล่าง ซึ่งทำงานได้ทันที'
+      );
+      setIsLiveCameraOpen(false);
+    }
+  };
+
+  const capturePhotoFromLiveStream = () => {
+    if (!videoRef.current) return;
+
+    try {
+      const video = videoRef.current;
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth || 1280;
+      canvas.height = video.videoHeight || 720;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+
+      stopLiveStream();
+      setSelectedImage(dataUrl);
+      setMimeType('image/jpeg');
+      extractWithAI(dataUrl, 'image/jpeg');
+    } catch (err) {
+      console.error('Capture error:', err);
+      setErrorMessage('ไม่สามารถบันทึกภาพจากกล้องได้ กรุณาลองใหม่อีกครั้ง');
+    }
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -41,16 +135,41 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
 
     setMimeType(file.type || 'image/jpeg');
     setErrorMessage(null);
-    setExtractedData(null);
+    setExtractedStudents([]);
+    setSelectedIndices([]);
 
     const reader = new FileReader();
     reader.onloadend = () => {
       const base64 = reader.result as string;
       setSelectedImage(base64);
-      // Auto trigger AI extraction for smooth user experience
       extractWithAI(base64, file.type || 'image/jpeg');
     };
     reader.readAsDataURL(file);
+
+    // Reset input so user can choose same file again if needed
+    e.target.value = '';
+  };
+
+  const loadSampleSheet = async () => {
+    setIsLoading(true);
+    setErrorMessage(null);
+    setExtractedStudents([]);
+
+    try {
+      const res = await fetch('/api/ai/sample-image');
+      const data = await res.json();
+      if (!data.success || !data.dataUri) {
+        throw new Error('ไม่พบไฟล์ภาพตัวอย่าง');
+      }
+
+      setSelectedImage(data.dataUri);
+      setMimeType('image/jpeg');
+      await extractWithAI(data.dataUri, 'image/jpeg');
+    } catch (err: any) {
+      console.error('Failed to load sample image:', err);
+      setErrorMessage(err?.message || 'ไม่สามารถโหลดภาพตัวอย่างได้');
+      setIsLoading(false);
+    }
   };
 
   const extractWithAI = async (base64Data: string, type: string) => {
@@ -69,52 +188,92 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
 
       const result = await response.json();
 
-      if (!result.success || !result.data) {
+      if (!result.success) {
         throw new Error(result.error || 'ไม่สามารถสกัดข้อมูลจากภาพได้ กรุณาลองใหม่อีกครั้ง');
       }
 
-      const data = result.data;
+      const studentsList: Partial<Student>[] = result.students || (result.data ? [result.data] : []);
 
-      // Ensure STOU Lampang center is set
-      data.stouCenter = DEFAULT_STOU_CENTER;
+      if (studentsList.length === 0) {
+        throw new Error('ไม่พบข้อมูลนักศึกษาในภาพ กรุณาถ่ายภาพให้เห็นรหัสนักศึกษาและชื่อ-นามสกุลชัดเจนขึ้น');
+      }
 
-      setExtractedData(data);
+      // Ensure STOU center is set to STOU Lampang
+      const normalized = studentsList.map((s) => ({
+        ...s,
+        stouCenter: DEFAULT_STOU_CENTER,
+        status: s.status || 'กำลังศึกษา',
+      }));
+
+      setExtractedStudents(normalized);
+      setDocumentType(result.documentType || (normalized.length > 1 ? 'label_sheet' : 'single_document'));
+      // Select all by default
+      setSelectedIndices(normalized.map((_, i) => i));
     } catch (err: any) {
       console.error('Scan error:', err);
-      setErrorMessage(err?.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อ AI สแกนเอกสาร');
+      setErrorMessage(err?.message || 'เกิดข้อผิดพลาดในการประมวลผลข้อมูลภาพ');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleConfirmApply = () => {
-    if (extractedData) {
-      onApplyData(extractedData);
+  const toggleSelectIndex = (idx: number) => {
+    setSelectedIndices((prev) =>
+      prev.includes(idx) ? prev.filter((i) => i !== idx) : [...prev, idx]
+    );
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIndices.length === extractedStudents.length) {
+      setSelectedIndices([]);
+    } else {
+      setSelectedIndices(extractedStudents.map((_, i) => i));
+    }
+  };
+
+  const handleApplySingle = (student: Partial<Student>) => {
+    onApplyData(student);
+    onClose();
+  };
+
+  const handleBatchImport = () => {
+    const selected = extractedStudents.filter((_, i) => selectedIndices.includes(i));
+    if (selected.length === 0) return;
+
+    if (onBatchImport) {
+      onBatchImport(selected);
+      onClose();
+    } else if (selected.length === 1) {
+      onApplyData(selected[0]);
       onClose();
     }
   };
 
   const resetScan = () => {
+    stopLiveStream();
     setSelectedImage(null);
-    setExtractedData(null);
+    setExtractedStudents([]);
+    setSelectedIndices([]);
     setErrorMessage(null);
   };
 
+  if (!isOpen) return null;
+
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
-      <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-black/75 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+      <div className="bg-white dark:bg-neutral-900 border border-neutral-200 dark:border-neutral-800 rounded-3xl w-full max-w-3xl shadow-2xl overflow-hidden flex flex-col max-h-[94vh]">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between bg-emerald-50/50 dark:bg-emerald-950/20 shrink-0">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-emerald-700 text-white flex items-center justify-center shadow-sm">
+        <div className="px-5 sm:px-6 py-4 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between bg-emerald-50/60 dark:bg-emerald-950/20 shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-800 text-amber-300 flex items-center justify-center shadow-md">
               <Sparkles className="w-5 h-5 text-amber-300" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
-                <span>ถ่ายภาพ / ส่งรูปเอกสาร AI สแกนอัตโนมัติ</span>
+              <h2 className="text-base sm:text-lg font-bold text-neutral-900 dark:text-neutral-100 flex items-center gap-2">
+                <span>ถ่ายภาพ / สแกนเอกสารนักศึกษา มสธ. ลำปาง</span>
               </h2>
               <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                มสธ. ลำปาง · ลดเวลาพิมพ์และป้องกันความผิดพลาดจากการคีย์ข้อมูล
+                รองรับทั้งบัตรนักศึกษา และแผ่นใบปะหน้าซองจดหมายส่งเอกสาร มสธ. หลายรายชื่อ
               </p>
             </div>
           </div>
@@ -127,76 +286,151 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
           </button>
         </div>
 
-        {/* Hidden File Inputs */}
-        <input
-          type="file"
-          ref={fileInputRef}
-          onChange={handleFileChange}
-          accept="image/*,.pdf"
-          className="hidden"
-        />
-        <input
-          type="file"
-          ref={cameraInputRef}
-          onChange={handleFileChange}
-          accept="image/*"
-          capture="environment"
-          className="hidden"
-        />
-
         {/* Modal Body */}
-        <div className="overflow-y-auto p-6 space-y-5 flex-1">
-          {/* Step 1: Upload or Take Photo (if no image selected) */}
-          {!selectedImage ? (
+        <div className="overflow-y-auto p-4 sm:p-6 space-y-5 flex-1">
+          {/* Live Camera Viewfinder (if activated) */}
+          {isLiveCameraOpen && (
+            <div className="space-y-3 bg-neutral-950 p-4 rounded-2xl border border-neutral-800 text-center animate-in zoom-in-95 duration-150">
+              <div className="relative rounded-xl overflow-hidden bg-black aspect-video max-h-[50vh] mx-auto flex items-center justify-center">
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full h-full object-cover"
+                />
+
+                {/* Target overlay guide */}
+                <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-6">
+                  <div className="w-full h-full border-2 border-amber-400/70 rounded-xl relative shadow-lg">
+                    <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/60 text-[11px] text-amber-300 font-medium">
+                      จัดเอกสาร/ป้ายรายชื่อให้อยู่ในกรอบ
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Camera Controls */}
+              <div className="flex items-center justify-center gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => startLiveStream(cameraFacing === 'environment' ? 'user' : 'environment')}
+                  className="p-3 rounded-full bg-neutral-800 text-neutral-200 hover:bg-neutral-700 transition"
+                  title="สลับกล้องหน้า/หลัง"
+                >
+                  <SwitchCamera className="w-5 h-5" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={capturePhotoFromLiveStream}
+                  className="flex items-center gap-2 px-6 py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 active:bg-amber-600 text-emerald-950 font-bold text-sm shadow-lg shadow-amber-500/20 transition transform active:scale-95"
+                >
+                  <Camera className="w-5 h-5" />
+                  <span>กดถ่ายภาพนี้ทันที</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={stopLiveStream}
+                  className="p-3 rounded-full bg-neutral-800 text-neutral-200 hover:bg-neutral-700 transition"
+                  title="ยกเลิกกล้องสด"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Live stream error notice */}
+          {liveStreamError && (
+            <div className="p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-xl flex items-start gap-2 text-xs text-amber-800 dark:text-amber-300">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <p>{liveStreamError}</p>
+            </div>
+          )}
+
+          {/* Step 1: Upload or Take Photo (if no image selected and live camera not open) */}
+          {!selectedImage && !isLiveCameraOpen ? (
             <div className="space-y-4">
-              <div className="p-8 border-2 border-dashed border-emerald-300 dark:border-emerald-800 rounded-2xl bg-emerald-50/30 dark:bg-emerald-950/10 text-center space-y-4">
+              <div className="p-6 sm:p-8 border-2 border-dashed border-emerald-300 dark:border-emerald-800 rounded-2xl bg-emerald-50/40 dark:bg-emerald-950/10 text-center space-y-4">
                 <div className="w-16 h-16 rounded-2xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 flex items-center justify-center mx-auto shadow-inner">
                   <FileText className="w-8 h-8" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-neutral-900 dark:text-neutral-100">
-                    ถ่ายรูปหรืออัปโหลดภาพเอกสารนักศึกษา
+                  <h3 className="text-base sm:text-lg font-bold text-neutral-900 dark:text-neutral-100">
+                    เลือกวิธีการถ่ายภาพหรือส่งเอกสาร
                   </h3>
-                  <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1 max-w-md mx-auto">
-                    รองรับภาพถ่ายบัตรนักศึกษา มสธ., ใบเสร็จลงทะเบียนเรียน, ทะเบียนประวัติ, เอกสารสมัครเรียน หรือบัตรประชาชน ระบบ AI จะอ่านและกรอกข้อมูลให้ทันที
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1 max-w-lg mx-auto">
+                    ถ่ายภาพบัตรนักศึกษา, ใบเสร็จลงทะเบียน, หรือแผ่นสติกเกอร์ใบปะหน้าซองส่งเอกสาร มสธ. ระบบจะอ่านข้อมูลและช่วยบันทึกเข้าระบบทันที
                   </p>
                 </div>
 
-                {/* Mobile / Tablet Touch Buttons */}
-                <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+                {/* Primary Action Buttons (Tailored for iPad & Mobile Touch) */}
+                <div className="flex flex-col sm:flex-row items-stretch justify-center gap-3 pt-2 max-w-xl mx-auto">
+                  {/* Native Mobile / iPad Camera Button (Foolproof Direct Input Label) */}
+                  <label className="relative flex-1 flex items-center justify-center gap-2 px-5 py-3.5 rounded-xl bg-[#0c4a34] hover:bg-emerald-800 active:bg-emerald-950 text-white font-semibold text-xs sm:text-sm shadow-md transition cursor-pointer select-none border border-amber-400/80 min-h-[48px]">
+                    <Camera className="w-4 h-4 text-amber-300" />
+                    <span>ถ่ายภาพด้วยกล้อง (มือถือ/ไอแพด)</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      capture="environment"
+                      onChange={handleFileChange}
+                      className="sr-only"
+                    />
+                  </label>
+
+                  {/* Photo Library / File Picker (Native Direct Touch Label) */}
+                  <label className="relative flex-1 flex items-center justify-center gap-2 px-5 py-3.5 rounded-xl bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-750 text-neutral-800 dark:text-neutral-200 font-medium text-xs sm:text-sm shadow-2xs transition cursor-pointer select-none min-h-[48px]">
+                    <Upload className="w-4 h-4 text-emerald-600" />
+                    <span>เลือกไฟล์รูปภาพจากเครื่อง</span>
+                    <input
+                      type="file"
+                      accept="image/*,.pdf"
+                      onChange={handleFileChange}
+                      className="sr-only"
+                    />
+                  </label>
+                </div>
+
+                {/* Alternative Live Camera & Quick Test Buttons */}
+                <div className="pt-2 flex flex-wrap items-center justify-center gap-2 text-xs">
                   <button
                     type="button"
-                    onClick={() => cameraInputRef.current?.click()}
-                    className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-emerald-700 hover:bg-emerald-800 active:bg-emerald-900 text-white font-medium text-xs sm:text-sm shadow-md transition min-h-[46px]"
+                    onClick={() => startLiveStream('environment')}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300 transition"
                   >
-                    <Camera className="w-4 h-4" />
-                    <span>ถ่ายภาพด้วยกล้อง (มือถือ/ไอแพด)</span>
+                    <Camera className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>เปิดกล้องส่องถ่ายสดในจอ</span>
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-750 text-neutral-800 dark:text-neutral-200 font-medium text-xs sm:text-sm shadow-2xs transition min-h-[46px]"
+                    onClick={loadSampleSheet}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-100 dark:bg-amber-950/60 hover:bg-amber-200 border border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200 font-medium transition"
                   >
-                    <Upload className="w-4 h-4 text-emerald-600" />
-                    <span>เลือกไฟล์รูปภาพจากคลัง</span>
+                    <Layers className="w-3.5 h-3.5 text-amber-700 dark:text-amber-400" />
+                    <span>ทดสอบด้วยภาพใบปะหน้า มสธ. (12 รายชื่อ)</span>
                   </button>
                 </div>
               </div>
 
-              {/* Helpful Tips */}
+              {/* Guidelines */}
               <div className="bg-neutral-50 dark:bg-neutral-850 p-4 rounded-xl border border-neutral-200/80 dark:border-neutral-800 text-xs text-neutral-600 dark:text-neutral-400 space-y-1.5">
                 <span className="font-semibold text-neutral-900 dark:text-neutral-100 flex items-center gap-1.5">
                   <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                  คำแนะนำเพื่อให้สแกนได้แม่นยำสูงสุด:
+                  คำแนะนำสำหรับการถ่ายภาพบนมือถือและไอแพด:
                 </span>
-                <p>• วางเอกสารบนพื้นผิวเรียบที่มีแสงสว่างเพียงพอ ไม่ให้มีเงาบังตัวหนังสือ</p>
-                <p>• ถ่ายให้เห็นตัวเลขรหัสนักศึกษา 10 หลักและชื่อ-นามสกุล ชัดเจน</p>
-                <p>• สามารถตรวจสอบและแก้ไขข้อมูลเพิ่มเติมได้ก่อนกดยืนยันบันทึก</p>
+                <p>• กดปุ่ม <b>"ถ่ายภาพด้วยกล้อง (มือถือ/ไอแพด)"</b> เพื่อเปิดกล้องของอุปกรณ์โดยตรง</p>
+                <p>• ถ่ายภาพในที่แสงสว่างเพียงพอ วางเอกสารหรือแผ่นสติกเกอร์ให้แบนราบ</p>
+                <p>• หากเป็นแผ่นใบปะหน้าส่งเอกสารที่มีหลายรายชื่อ ระบบจะแยกและตรวจจับข้อมูลของทุกคนให้อัตโนมัติ</p>
               </div>
             </div>
-          ) : (
-            /* Step 2: Image Preview & AI Extraction Result */
+          ) : null}
+
+          {/* Step 2: Image Preview & AI Extraction Result */}
+          {selectedImage && (
             <div className="space-y-4">
               {/* Image Preview & Status Row */}
               <div className="flex items-center justify-between bg-neutral-50 dark:bg-neutral-850 p-3 rounded-xl border border-neutral-200 dark:border-neutral-800 text-xs">
@@ -204,30 +438,36 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
                   <img
                     src={selectedImage}
                     alt="Preview"
-                    className="w-12 h-12 object-cover rounded-lg border border-neutral-200"
+                    className="w-14 h-14 object-cover rounded-lg border border-neutral-300 shadow-2xs"
                   />
                   <div>
-                    <span className="font-semibold text-neutral-800 dark:text-neutral-200 block">
-                      รูปภาพเอกสารนักศึกษา
+                    <span className="font-semibold text-neutral-800 dark:text-neutral-200 block text-xs sm:text-sm">
+                      {documentType === 'label_sheet'
+                        ? 'แผ่นใบปะหน้าซองเอกสาร มสธ. (หลายรายชื่อ)'
+                        : 'ภาพถ่ายเอกสารนักศึกษา'}
                     </span>
                     <span className="text-[11px] text-neutral-500">
-                      {isLoading ? 'AI กำลังประมวลผลข้อความ...' : 'สแกนเสร็จสิ้น'}
+                      {isLoading
+                        ? 'AI กำลังประมวลผลข้อความและถอดรหัส...'
+                        : `ตรวจพบข้อมูลนักศึกษา ${extractedStudents.length} รายชื่อ`}
                     </span>
                   </div>
                 </div>
 
-                <button
-                  onClick={resetScan}
-                  className="flex items-center gap-1 text-xs text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 px-3 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>ถ่ายใหม่</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={resetScan}
+                    className="flex items-center gap-1 text-xs text-neutral-600 dark:text-neutral-300 hover:text-neutral-900 px-3 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>ถ่าย/เลือกใหม่</span>
+                  </button>
+                </div>
               </div>
 
               {/* Loading State */}
               {isLoading && (
-                <div className="py-10 text-center space-y-3">
+                <div className="py-12 text-center space-y-3">
                   <div className="w-12 h-12 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 flex items-center justify-center mx-auto animate-spin">
                     <Loader2 className="w-6 h-6" />
                   </div>
@@ -236,7 +476,7 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
                       AI กำลังอ่านและวิเคราะห์ข้อมูลจากภาพถ่าย...
                     </p>
                     <p className="text-xs text-neutral-500 mt-1">
-                      กำลังตรวจหารหัสนักศึกษา มสธ., ชื่อ-นามสกุล, สาขาวิชา, ที่อยู่ และเบอร์ติดต่อ
+                      กำลังตรวจหารหัสนักศึกษา 10 หลัก, ชื่อ-นามสกุล, ที่อยู่, จังหวัด และคำนวณปีการศึกษา
                     </p>
                   </div>
                 </div>
@@ -252,79 +492,168 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
                       onClick={() => extractWithAI(selectedImage, mimeType)}
                       className="mt-2 text-emerald-700 dark:text-emerald-400 underline font-medium"
                     >
-                      ลองใหม่อีกครั้ง
+                      ลองประมวลผลใหม่อีกครั้ง
                     </button>
                   </div>
                 </div>
               )}
 
-              {/* Extracted Data Card */}
-              {extractedData && !isLoading && (
+              {/* Extracted Data: Case 1 - Multi-Student Batch Sheet (Like user's attached photo) */}
+              {!isLoading && extractedStudents.length > 1 && (
+                <div className="space-y-3">
+                  {/* Batch Header Bar */}
+                  <div className="p-3.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                      <div>
+                        <span className="font-bold text-emerald-900 dark:text-emerald-200 text-sm">
+                          สแกนใบปะหน้าสำเร็จ! พบรายชื่อนักศึกษา {extractedStudents.length} คน
+                        </span>
+                        <p className="text-[11px] text-emerald-700 dark:text-emerald-400">
+                          สามารถเลือกบันทึกทั้งหมดเข้าระบบในคราวเดียว หรือเลือกเฉพาะบางคนได้
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={toggleSelectAll}
+                      className="self-start sm:self-auto px-3 py-1 rounded-lg text-xs font-semibold bg-white dark:bg-neutral-800 border border-emerald-300 text-emerald-800 dark:text-emerald-300 hover:bg-emerald-50 transition"
+                    >
+                      {selectedIndices.length === extractedStudents.length ? 'ยกเลิกเลือกทั้งหมด' : 'เลือกทั้งหมด'}
+                    </button>
+                  </div>
+
+                  {/* List of Detected Students */}
+                  <div className="space-y-2 max-h-[46vh] overflow-y-auto pr-1">
+                    {extractedStudents.map((st, idx) => {
+                      const isSelected = selectedIndices.includes(idx);
+                      return (
+                        <div
+                          key={idx}
+                          onClick={() => toggleSelectIndex(idx)}
+                          className={`p-3.5 rounded-xl border text-xs transition cursor-pointer flex items-start gap-3 ${
+                            isSelected
+                              ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-400 dark:border-emerald-700 shadow-2xs'
+                              : 'bg-white dark:bg-neutral-850 border-neutral-200 dark:border-neutral-800 opacity-70 hover:opacity-100'
+                          }`}
+                        >
+                          {/* Checkbox */}
+                          <div
+                            className={`w-5 h-5 rounded-md flex items-center justify-center shrink-0 mt-0.5 border transition ${
+                              isSelected
+                                ? 'bg-emerald-700 border-emerald-700 text-white'
+                                : 'border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-800'
+                            }`}
+                          >
+                            {isSelected && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                          </div>
+
+                          {/* Student Details */}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex flex-wrap items-center justify-between gap-1">
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-sm text-neutral-900 dark:text-neutral-100">
+                                  {st.title}{st.firstName} {st.lastName}
+                                </span>
+                                <span className="px-2 py-0.5 rounded font-mono font-bold text-xs bg-emerald-100 dark:bg-emerald-900/60 text-emerald-900 dark:text-emerald-300">
+                                  {formatStudentId(st.studentId || '')}
+                                </span>
+                              </div>
+
+                              <span className="text-[11px] text-neutral-500">
+                                ปีการศึกษา {st.academicYear || 2566}
+                              </span>
+                            </div>
+
+                            <p className="text-neutral-600 dark:text-neutral-400 text-xs mt-1 truncate">
+                              <MapPin className="w-3 h-3 inline mr-1 text-emerald-600" />
+                              {st.address} ต.{st.subdistrict} อ.{st.district} จ.{st.province} {st.postalCode}
+                            </p>
+
+                            <div className="flex items-center justify-between mt-2 pt-2 border-t border-neutral-100 dark:border-neutral-800 text-[11px] text-neutral-500">
+                              <span>
+                                {st.faculty || 'สาขาวิชาวิทยาการจัดการ'} {st.major ? `(${st.major})` : ''}
+                              </span>
+
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleApplySingle(st);
+                                }}
+                                className="text-emerald-700 dark:text-emerald-400 hover:underline font-semibold flex items-center gap-1"
+                              >
+                                <span>เปิดแก้ไขในฟอร์ม</span>
+                                <ArrowRight className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Extracted Data: Case 2 - Single Student Card */}
+              {!isLoading && extractedStudents.length === 1 && (
                 <div className="space-y-4">
                   <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl flex items-center gap-2 text-xs text-emerald-800 dark:text-emerald-300 font-medium">
                     <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>AI สกัดข้อมูลสำเร็จ! กรุณาตรวจสอบข้อมูลด้านล่างก่อนนำเข้าแบบฟอร์ม:</span>
+                    <span>AI สกัดข้อมูลสำเร็จ! ตรวจสอบข้อมูลก่อนนำเข้าแบบฟอร์ม:</span>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs bg-neutral-50 dark:bg-neutral-850 p-4 rounded-2xl border border-neutral-200 dark:border-neutral-800">
-                    <div>
-                      <span className="text-neutral-500 block text-[11px]">รหัสนักศึกษา:</span>
-                      <span className="font-mono font-bold text-sm text-emerald-800 dark:text-emerald-400">
-                        {extractedData.studentId || '(ไม่พบในภาพ - ระบุภายหลังได้)'}
-                      </span>
-                    </div>
+                  {(() => {
+                    const st = extractedStudents[0];
+                    return (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs bg-neutral-50 dark:bg-neutral-850 p-4 rounded-2xl border border-neutral-200 dark:border-neutral-800">
+                        <div>
+                          <span className="text-neutral-500 block text-[11px]">รหัสนักศึกษา:</span>
+                          <span className="font-mono font-bold text-sm text-emerald-800 dark:text-emerald-400">
+                            {formatStudentId(st.studentId || '') || '(ไม่พบในภาพ)'}
+                          </span>
+                        </div>
 
-                    <div>
-                      <span className="text-neutral-500 block text-[11px]">ชื่อ-นามสกุล:</span>
-                      <span className="font-semibold text-neutral-900 dark:text-neutral-100">
-                        {extractedData.title || ''}{extractedData.firstName || '-'} {extractedData.lastName || '-'}
-                      </span>
-                    </div>
+                        <div>
+                          <span className="text-neutral-500 block text-[11px]">ชื่อ-นามสกุล:</span>
+                          <span className="font-semibold text-neutral-900 dark:text-neutral-100">
+                            {st.title || ''}{st.firstName || '-'} {st.lastName || '-'}
+                          </span>
+                        </div>
 
-                    <div>
-                      <span className="text-neutral-500 block text-[11px]">สาขาวิชา:</span>
-                      <span className="font-medium text-neutral-800 dark:text-neutral-200">
-                        {extractedData.faculty || 'สาขาวิชาวิทยาการจัดการ'}
-                      </span>
-                    </div>
+                        <div>
+                          <span className="text-neutral-500 block text-[11px]">สาขาวิชา:</span>
+                          <span className="font-medium text-neutral-800 dark:text-neutral-200">
+                            {st.faculty || 'สาขาวิชาวิทยาการจัดการ'}
+                          </span>
+                        </div>
 
-                    <div>
-                      <span className="text-neutral-500 block text-[11px]">แขนงวิชา/วิชาเอก:</span>
-                      <span className="font-medium text-neutral-800 dark:text-neutral-200">
-                        {extractedData.major || '-'}
-                      </span>
-                    </div>
+                        <div>
+                          <span className="text-neutral-500 block text-[11px]">ปีการศึกษา:</span>
+                          <span className="font-medium text-neutral-800 dark:text-neutral-200">
+                            {st.academicYear || 2567}
+                          </span>
+                        </div>
 
-                    <div>
-                      <span className="text-neutral-500 block text-[11px]">เบอร์โทรศัพท์:</span>
-                      <span className="font-mono text-neutral-800 dark:text-neutral-200">
-                        {extractedData.phone || '-'}
-                      </span>
-                    </div>
+                        <div className="sm:col-span-2">
+                          <span className="text-neutral-500 block text-[11px]">ที่อยู่:</span>
+                          <span className="text-neutral-700 dark:text-neutral-300">
+                            {st.address || '-'} {st.subdistrict ? `ต.${st.subdistrict}` : ''} {st.district ? `อ.${st.district}` : ''} จ.{st.province || 'ลำปาง'} {st.postalCode || ''}
+                          </span>
+                        </div>
 
-                    <div>
-                      <span className="text-neutral-500 block text-[11px]">จังหวัด:</span>
-                      <span className="font-medium text-neutral-800 dark:text-neutral-200">
-                        {extractedData.province || 'ลำปาง'}
-                      </span>
-                    </div>
-
-                    <div className="sm:col-span-2">
-                      <span className="text-neutral-500 block text-[11px]">ที่อยู่:</span>
-                      <span className="text-neutral-700 dark:text-neutral-300">
-                        {extractedData.address || '-'} {extractedData.subdistrict ? `ต.${extractedData.subdistrict}` : ''} {extractedData.district ? `อ.${extractedData.district}` : ''} {extractedData.postalCode || ''}
-                      </span>
-                    </div>
-
-                    {extractedData.notes && (
-                      <div className="sm:col-span-2 pt-1 border-t border-neutral-200 dark:border-neutral-750">
-                        <span className="text-neutral-500 block text-[11px]">หมายเหตุที่อ่านได้:</span>
-                        <span className="text-neutral-600 dark:text-neutral-400 italic">
-                          {extractedData.notes}
-                        </span>
+                        {st.notes && (
+                          <div className="sm:col-span-2 pt-1 border-t border-neutral-200 dark:border-neutral-750">
+                            <span className="text-neutral-500 block text-[11px]">หมายเหตุ/รหัสจัดส่ง:</span>
+                            <span className="text-neutral-600 dark:text-neutral-400 italic">
+                              {st.notes}
+                            </span>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
+                    );
+                  })()}
                 </div>
               )}
             </div>
@@ -332,20 +661,35 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-neutral-200 dark:border-neutral-800 bg-neutral-50/50 dark:bg-neutral-850/50 flex items-center justify-between gap-3 shrink-0">
+        <div className="px-5 sm:px-6 py-4 border-t border-neutral-200 dark:border-neutral-800 bg-neutral-50/70 dark:bg-neutral-850/70 flex flex-wrap items-center justify-between gap-3 shrink-0">
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 text-xs font-medium text-neutral-600 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-800 rounded-xl transition min-h-[44px]"
+            className="px-4 py-2.5 text-xs font-medium text-neutral-600 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-800 rounded-xl transition min-h-[44px]"
           >
-            ปิด
+            ยกเลิก / ปิด
           </button>
 
-          {extractedData && (
+          {/* Action buttons */}
+          {!isLoading && extractedStudents.length > 1 && (
             <button
               type="button"
-              onClick={handleConfirmApply}
-              className="flex items-center gap-2 px-5 py-2.5 text-xs sm:text-sm font-semibold text-white bg-[#0c4a34] hover:bg-emerald-800 active:bg-emerald-950 border border-amber-400/70 rounded-xl shadow-md transition-all min-h-[44px] focus:outline-none focus:ring-2 focus:ring-amber-400"
+              disabled={selectedIndices.length === 0}
+              onClick={handleBatchImport}
+              className="flex items-center gap-2 px-6 py-2.5 text-xs sm:text-sm font-bold text-white bg-[#0c4a34] hover:bg-emerald-800 active:bg-emerald-950 border border-amber-400/80 rounded-xl shadow-md transition-all min-h-[44px] disabled:opacity-50"
+            >
+              <FileCheck2 className="w-4 h-4 text-amber-300" />
+              <span>
+                บันทึกเข้าระบบทันที ({selectedIndices.length} รายชื่อ)
+              </span>
+            </button>
+          )}
+
+          {!isLoading && extractedStudents.length === 1 && (
+            <button
+              type="button"
+              onClick={() => handleApplySingle(extractedStudents[0])}
+              className="flex items-center gap-2 px-5 py-2.5 text-xs sm:text-sm font-semibold text-white bg-[#0c4a34] hover:bg-emerald-800 active:bg-emerald-950 border border-amber-400/70 rounded-xl shadow-md transition-all min-h-[44px]"
             >
               <span>นำเข้าข้อมูลสู่แบบฟอร์ม</span>
               <ArrowRight className="w-4 h-4 text-amber-300" />

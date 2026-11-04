@@ -255,16 +255,30 @@ export const StudentBarcodeScannerModal: React.FC<StudentBarcodeScannerModalProp
                 </div>
               )}
 
-              {/* Alternative Option: File Upload */}
-              <div className="pt-2 border-t border-neutral-100 dark:border-neutral-800 flex justify-center">
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-medium text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 border border-emerald-200 dark:border-emerald-800 transition min-h-[40px]"
-                >
+              {/* Alternative Options: Direct Native Camera & File Upload for Mobile/iPad */}
+              <div className="pt-2 border-t border-neutral-100 dark:border-neutral-800 flex flex-col sm:flex-row gap-2 justify-center">
+                <label className="flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-semibold text-white bg-emerald-800 hover:bg-emerald-900 border border-emerald-700 transition cursor-pointer select-none min-h-[42px]">
+                  <Camera className="w-3.5 h-3.5 text-amber-300" />
+                  <span>ถ่ายภาพบาร์โค้ดด้วยกล้อง (มือถือ/ไอแพด)</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={handleFileUpload}
+                    className="sr-only"
+                  />
+                </label>
+
+                <label className="flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-medium text-emerald-800 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 hover:bg-emerald-100 border border-emerald-200 dark:border-emerald-800 transition cursor-pointer select-none min-h-[42px]">
                   <Upload className="w-3.5 h-3.5" />
                   <span>เลือกรูปภาพบาร์โค้ดจากแกลเลอรี</span>
-                </button>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleFileUpload}
+                    className="sr-only"
+                  />
+                </label>
               </div>
             </div>
           )}
