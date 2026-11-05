@@ -12,7 +12,20 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
-app.use(express.json({ limit: '25mb' }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Ensure Express never returns HTML error pages for body parser errors
+app.use((err: any, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (err) {
+    console.warn('Express body parser error caught:', err?.message);
+    return res.status(err.status || 400).json({
+      success: false,
+      error: err.message || 'ขนาดไฟล์เกินกำหนดหรือไม่สามารถประมวลผลได้',
+    });
+  }
+  next();
+});
 
 // Initialize Google GenAI on server-side
 const ai = new GoogleGenAI({
@@ -320,7 +333,8 @@ app.post('/api/ai/scan-student', async (req, res) => {
           text: prompt,
         };
 
-        const response = await ai.models.generateContent({
+        // Use 12-second timeout to prevent Cloud Run Gateway Timeout (504)
+        const generatePromise = ai.models.generateContent({
           model: 'gemini-3.8-flash',
           contents: { parts: [imagePart, textPart] },
           config: {
@@ -369,10 +383,15 @@ app.post('/api/ai/scan-student', async (req, res) => {
           },
         });
 
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('AI OCR request timeout after 12s')), 12000)
+        );
+
+        const response = await Promise.race([generatePromise, timeoutPromise]);
         const text = response.text || '{}';
         parsedResult = JSON.parse(text);
       } catch (geminiError) {
-        console.warn('Gemini API call failed, falling back to STOU intelligent sheet parser:', geminiError);
+        console.warn('Gemini API call or timeout, falling back to STOU intelligent sheet parser:', geminiError);
       }
     }
 
