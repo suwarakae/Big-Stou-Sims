@@ -43,30 +43,75 @@
         var OrigWebSocket = window.WebSocket;
         if (OrigWebSocket) {
           try {
+            function isVite(url, protocols) {
+              if (typeof protocols === 'string' && protocols.indexOf('vite') !== -1) return true;
+              if (Array.isArray(protocols) && protocols.some(function(p) { return typeof p === 'string' && p.indexOf('vite') !== -1; })) return true;
+              if (typeof url === 'string' && (url.indexOf('vite-hmr') !== -1 || url.indexOf('token=') !== -1 || url.indexOf('vite-ping') !== -1)) return true;
+              return false;
+            }
+
+            function MockViteWebSocket(url, protocols) {
+              var self = this;
+              var target = new EventTarget();
+              self.url = String(url || '');
+              self.protocol = Array.isArray(protocols) ? (protocols[0] || '') : (protocols || '');
+              self.readyState = 1; // WebSocket.OPEN
+              self.CONNECTING = 0;
+              self.OPEN = 1;
+              self.CLOSING = 2;
+              self.CLOSED = 3;
+              self.binaryType = 'blob';
+              self.bufferedAmount = 0;
+              self.extensions = '';
+              self.onopen = null;
+              self.onclose = null;
+              self.onerror = null;
+              self.onmessage = null;
+
+              self.addEventListener = function(type, listener, options) {
+                target.addEventListener(type, listener, options);
+              };
+              self.removeEventListener = function(type, listener, options) {
+                target.removeEventListener(type, listener, options);
+              };
+              self.dispatchEvent = function(event) {
+                return target.dispatchEvent(event);
+              };
+              self.send = function() {};
+              self.close = function() {
+                self.readyState = 3;
+                var evt = new Event('close');
+                evt.wasClean = true;
+                evt.code = 1000;
+                evt.reason = 'Normal Closure';
+                target.dispatchEvent(evt);
+                if (typeof self.onclose === 'function') self.onclose(evt);
+              };
+
+              setTimeout(function() {
+                if (self.readyState === 1) {
+                  var evt = new Event('open');
+                  target.dispatchEvent(evt);
+                  if (typeof self.onopen === 'function') self.onopen(evt);
+                }
+              }, 0);
+            }
+            MockViteWebSocket.CONNECTING = 0;
+            MockViteWebSocket.OPEN = 1;
+            MockViteWebSocket.CLOSING = 2;
+            MockViteWebSocket.CLOSED = 3;
+
             window.WebSocket = function(url, protocols) {
-              var isViteHmr = (typeof protocols === 'string' && protocols.indexOf('vite') !== -1) ||
-                              (Array.isArray(protocols) && protocols.some(function(p) { return p.indexOf('vite') !== -1; })) ||
-                              (typeof url === 'string' && url.indexOf('vite') !== -1);
-              var ws = new OrigWebSocket(url, protocols);
-              if (isViteHmr) {
-                ws.addEventListener('error', function(err) {
-                  if (err && typeof err.stopImmediatePropagation === 'function') {
-                    err.stopImmediatePropagation();
-                  }
-                });
-                ws.addEventListener('close', function(evt) {
-                  if (evt && typeof evt.stopImmediatePropagation === 'function') {
-                    evt.stopImmediatePropagation();
-                  }
-                });
+              if (isVite(url, protocols)) {
+                return new MockViteWebSocket(url, protocols);
               }
-              return ws;
+              return new OrigWebSocket(url, protocols);
             };
             window.WebSocket.prototype = OrigWebSocket.prototype;
-            window.WebSocket.CONNECTING = OrigWebSocket.CONNECTING;
-            window.WebSocket.OPEN = OrigWebSocket.OPEN;
-            window.WebSocket.CLOSING = OrigWebSocket.CLOSING;
-            window.WebSocket.CLOSED = OrigWebSocket.CLOSED;
+            window.WebSocket.CONNECTING = 0;
+            window.WebSocket.OPEN = 1;
+            window.WebSocket.CLOSING = 2;
+            window.WebSocket.CLOSED = 3;
           } catch (e) {
             // ignore
           }
