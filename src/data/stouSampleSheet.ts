@@ -230,3 +230,26 @@ export const STOU_SAMPLE_LABEL_SHEET_DATA: Partial<Student>[] = [
     notes: 'รหัสจัดส่ง 10151 (24)',
   },
 ];
+
+// Sample single student ID card data (STOU Student Card / บัตรประจำตัวนักศึกษา มสธ.)
+export const STOU_SAMPLE_STUDENT_CARD: Partial<Student> = {
+  studentId: '6630018899',
+  title: 'นาย',
+  firstName: 'สมเกียรติ',
+  lastName: 'มั่นคง',
+  faculty: 'สาขาวิชาวิทยาการจัดการ',
+  major: 'การจัดการทั่วไป',
+  stouCenter: 'ศูนย์วิทยบริการและชุมชนสัมพันธ์ มสธ. ลำปาง',
+  academicYear: 2566,
+  entrySemester: 1,
+  phone: '081-992-3456',
+  email: 'somkiat.m@stou.ac.th',
+  idCardNumber: '1529900123456',
+  address: '99/5 หมู่ 3 ถ.พหลโยธิน',
+  subdistrict: 'ชมพู',
+  district: 'เมืองลำปาง',
+  province: 'ลำปาง',
+  postalCode: '52100',
+  status: 'กำลังศึกษา',
+  notes: 'บันทึกผ่านการถ่ายภาพบัตรประจำตัวนักศึกษา มสธ.',
+};

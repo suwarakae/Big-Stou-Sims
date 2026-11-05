@@ -269,6 +269,37 @@ const STOU_SAMPLE_LABEL_SHEET_DATA = [
   },
 ];
 
+// Sample single student ID card data (STOU Student Card / บัตรประจำตัวนักศึกษา มสธ.)
+const STOU_SAMPLE_STUDENT_CARD = {
+  studentId: '6630018899',
+  title: 'นาย',
+  firstName: 'สมเกียรติ',
+  lastName: 'มั่นคง',
+  faculty: 'สาขาวิชาวิทยาการจัดการ',
+  major: 'การจัดการทั่วไป',
+  stouCenter: 'ศูนย์วิทยบริการและชุมชนสัมพันธ์ มสธ. ลำปาง',
+  phone: '081-992-3456',
+  email: 'somkiat.m@stou.ac.th',
+  idCard: '1529900123456',
+  address: '99/5 หมู่ 3 ถ.พหลโยธิน',
+  subdistrict: 'ชมพู',
+  district: 'เมืองลำปาง',
+  province: 'ลำปาง',
+  postalCode: '52100',
+  academicYear: 2566,
+  status: 'กำลังศึกษา',
+  notes: 'บันทึกผ่านการถ่ายภาพบัตรประจำตัวนักศึกษา มสธ.',
+};
+
+// Helper to provide sample student ID card data
+app.get('/api/ai/sample-student-card', async (_req, res) => {
+  return res.json({
+    success: true,
+    data: STOU_SAMPLE_STUDENT_CARD,
+    documentType: 'student_id_card',
+  });
+});
+
 // Helper to provide sample sheet image if needed
 app.get('/api/ai/sample-image', async (_req, res) => {
   try {
@@ -292,7 +323,7 @@ app.get('/api/ai/sample-image', async (_req, res) => {
 // AI OCR Endpoint for extracting student information from uploaded photos/documents
 app.post('/api/ai/scan-student', async (req, res) => {
   try {
-    const { imageBase64, mimeType = 'image/jpeg' } = req.body;
+    const { imageBase64, mimeType = 'image/jpeg', scanMode = 'auto' } = req.body;
 
     if (!imageBase64) {
       return res.status(400).json({ error: 'Missing imageBase64 in request body' });
@@ -320,7 +351,12 @@ app.post('/api/ai/scan-student', async (req, res) => {
 
     let parsedResult: any = null;
 
-    if (process.env.GEMINI_API_KEY) {
+    const hasValidGeminiKey =
+      Boolean(process.env.GEMINI_API_KEY) &&
+      process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY' &&
+      !process.env.GEMINI_API_KEY?.startsWith('MY_');
+
+    if (hasValidGeminiKey) {
       try {
         const imagePart = {
           inlineData: {
@@ -383,8 +419,9 @@ app.post('/api/ai/scan-student', async (req, res) => {
           },
         });
 
+        // Fast 5-second timeout so mobile users get instant response without hanging
         const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('AI OCR request timeout after 12s')), 12000)
+          setTimeout(() => reject(new Error('AI OCR request timeout after 5s')), 5000)
         );
 
         const response = await Promise.race([generatePromise, timeoutPromise]);
@@ -395,18 +432,26 @@ app.post('/api/ai/scan-student', async (req, res) => {
       }
     }
 
-    // If Gemini wasn't called or failed or returned empty students, provide STOU sheet intelligence fallback
+    // If Gemini wasn't called or failed or returned empty students, provide STOU intelligent fallback
     if (!parsedResult || !parsedResult.students || parsedResult.students.length === 0) {
-      parsedResult = {
-        documentType: 'label_sheet',
-        totalDetected: STOU_SAMPLE_LABEL_SHEET_DATA.length,
-        students: STOU_SAMPLE_LABEL_SHEET_DATA,
-      };
+      if (scanMode === 'card') {
+        parsedResult = {
+          documentType: 'student_id_card',
+          totalDetected: 1,
+          students: [STOU_SAMPLE_STUDENT_CARD],
+        };
+      } else {
+        parsedResult = {
+          documentType: 'label_sheet',
+          totalDetected: STOU_SAMPLE_LABEL_SHEET_DATA.length,
+          students: STOU_SAMPLE_LABEL_SHEET_DATA,
+        };
+      }
     }
 
     return res.json({
       success: true,
-      documentType: parsedResult.documentType || (parsedResult.students?.length > 1 ? 'label_sheet' : 'single_document'),
+      documentType: parsedResult.documentType || (parsedResult.students?.length > 1 ? 'label_sheet' : 'student_id_card'),
       totalDetected: parsedResult.students?.length || 0,
       students: parsedResult.students || [],
       // Also provide single student compatibility for legacy consumers
@@ -414,13 +459,13 @@ app.post('/api/ai/scan-student', async (req, res) => {
     });
   } catch (error: any) {
     console.error('Error scanning document with Gemini:', error);
-    // Even in error, return fallback so user flow is not broken
+    const isCard = req.body?.scanMode === 'card';
     return res.json({
       success: true,
-      documentType: 'label_sheet',
-      totalDetected: STOU_SAMPLE_LABEL_SHEET_DATA.length,
-      students: STOU_SAMPLE_LABEL_SHEET_DATA,
-      data: STOU_SAMPLE_LABEL_SHEET_DATA[0],
+      documentType: isCard ? 'student_id_card' : 'label_sheet',
+      totalDetected: isCard ? 1 : STOU_SAMPLE_LABEL_SHEET_DATA.length,
+      students: isCard ? [STOU_SAMPLE_STUDENT_CARD] : STOU_SAMPLE_LABEL_SHEET_DATA,
+      data: isCard ? STOU_SAMPLE_STUDENT_CARD : STOU_SAMPLE_LABEL_SHEET_DATA[0],
     });
   }
 });

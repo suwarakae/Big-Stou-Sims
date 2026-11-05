@@ -208,16 +208,16 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
                 </div>
                 <div>
                   <h4 className="text-xs sm:text-sm font-bold text-emerald-950 dark:text-emerald-200 flex items-center gap-1.5">
-                    <span>ถ่ายรูปหรืออัปโหลดเอกสาร AI สแกนอัตโนมัติ</span>
+                    <span>ถ่ายรูปบัตรนักศึกษา มสธ. สแกนกรอกให้อัตโนมัติ</span>
                     <Sparkles className="w-3.5 h-3.5 text-amber-500" />
                   </h4>
                   <p className="text-[11px] text-emerald-800/80 dark:text-emerald-400">
-                    ไม่อยากพิมพ์เอง? ถ่ายภาพบัตรนักศึกษาหรือใบเสร็จลงทะเบียน ให้ AI อ่านและกรอกให้อัตโนมัติทันที
+                    ไม่อยากพิมพ์เอง? ถ่ายภาพบัตรประจำตัวนักศึกษา มสธ. ระบบจะอ่านรหัส ชื่อ-สกุล สาขาวิชา และกรอกลงฟอร์มให้อัตโนมัติทันที
                   </p>
                 </div>
               </div>
-              <span className="text-xs font-semibold text-emerald-800 dark:text-emerald-300 bg-white dark:bg-emerald-900/60 px-3 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-700 shrink-0">
-                สแกนเลย
+              <span className="text-xs font-bold text-white bg-[#0c4a34] px-3.5 py-1.5 rounded-lg border border-amber-400/80 shadow-xs shrink-0">
+                ถ่ายบัตรเลย
               </span>
             </div>
           )}

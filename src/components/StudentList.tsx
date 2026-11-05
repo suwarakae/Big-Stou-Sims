@@ -176,10 +176,10 @@ export const StudentList: React.FC<StudentListProps> = ({
           <button
             onClick={onOpenAIScan}
             className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-[#0c4a34] hover:bg-emerald-800 active:bg-emerald-950 border border-amber-400/60 rounded-xl shadow-xs transition min-h-[40px] focus:ring-2 focus:ring-amber-400"
-            title="ถ่ายภาพหรืออัปโหลดรูปเอกสาร ให้ AI สแกนกรอกข้อมูลให้อัตโนมัติ"
+            title="ถ่ายภาพบัตรนักศึกษา หรืออัปโหลดรูปเอกสาร ให้ AI สแกนบันทึกข้อมูลให้อัตโนมัติ"
           >
             <Camera className="w-4 h-4 text-emerald-200" />
-            <span className="inline text-[11px] sm:text-xs">ถ่ายภาพ/สแกน</span>
+            <span className="inline text-[11px] sm:text-xs">ถ่ายบัตร/สแกน</span>
             <Sparkles className="w-3.5 h-3.5 text-amber-300" />
           </button>
 

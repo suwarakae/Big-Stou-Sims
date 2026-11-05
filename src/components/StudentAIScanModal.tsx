@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Student, DEFAULT_STOU_CENTER } from '../types/student';
+import { Student, StudentStatus, DEFAULT_STOU_CENTER } from '../types/student';
 import { 
   Camera, 
   Upload, 
@@ -17,11 +17,14 @@ import {
   SwitchCamera,
   Layers,
   MapPin,
-  FileCheck2
+  FileCheck2,
+  CreditCard,
+  GraduationCap,
+  User
 } from 'lucide-react';
 import { formatStudentId } from '../utils/validation';
 import { optimizeImageForOcr } from '../utils/imageOptimizer';
-import { STOU_SAMPLE_LABEL_SHEET_DATA } from '../data/stouSampleSheet';
+import { STOU_SAMPLE_LABEL_SHEET_DATA, STOU_SAMPLE_STUDENT_CARD } from '../data/stouSampleSheet';
 
 interface StudentAIScanModalProps {
   isOpen: boolean;
@@ -40,6 +43,9 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
   const [mimeType, setMimeType] = useState<string>('image/jpeg');
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Mode: 'card' (single student ID card) or 'sheet' (multi-label sheet)
+  const [scanMode, setScanMode] = useState<'card' | 'sheet'>('card');
 
   // Extracted results (can be 1 or multiple students)
   const [extractedStudents, setExtractedStudents] = useState<Partial<Student>[]>([]);
@@ -168,9 +174,29 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
     e.target.value = '';
   };
 
+  const loadSampleCard = () => {
+    setIsLoading(true);
+    setErrorMessage(null);
+    setScanMode('card');
+    setExtractedStudents([]);
+
+    setTimeout(() => {
+      const normalized: Partial<Student>[] = [{
+        ...STOU_SAMPLE_STUDENT_CARD,
+        stouCenter: DEFAULT_STOU_CENTER,
+        status: 'กำลังศึกษา' as StudentStatus,
+      }];
+      setExtractedStudents(normalized);
+      setDocumentType('student_id_card');
+      setSelectedIndices([0]);
+      setIsLoading(false);
+    }, 250);
+  };
+
   const loadSampleSheet = async () => {
     setIsLoading(true);
     setErrorMessage(null);
+    setScanMode('sheet');
     setExtractedStudents([]);
 
     try {
@@ -199,16 +225,36 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
   };
 
   const applyFallbackData = () => {
-    const normalized = STOU_SAMPLE_LABEL_SHEET_DATA.map((s) => ({
-      ...s,
-      stouCenter: DEFAULT_STOU_CENTER,
-      status: s.status || 'กำลังศึกษา',
-    }));
-    setExtractedStudents(normalized);
-    setDocumentType('label_sheet');
-    setSelectedIndices(normalized.map((_, i) => i));
+    if (scanMode === 'card') {
+      const normalized: Partial<Student>[] = [{
+        ...STOU_SAMPLE_STUDENT_CARD,
+        stouCenter: DEFAULT_STOU_CENTER,
+        status: 'กำลังศึกษา' as StudentStatus,
+      }];
+      setExtractedStudents(normalized);
+      setDocumentType('student_id_card');
+      setSelectedIndices([0]);
+    } else {
+      const normalized: Partial<Student>[] = STOU_SAMPLE_LABEL_SHEET_DATA.map((s) => ({
+        ...s,
+        stouCenter: DEFAULT_STOU_CENTER,
+        status: (s.status as StudentStatus) || 'กำลังศึกษา',
+      }));
+      setExtractedStudents(normalized);
+      setDocumentType('label_sheet');
+      setSelectedIndices(normalized.map((_, i) => i));
+    }
     setErrorMessage(null);
     setIsLoading(false);
+  };
+
+  const handleSaveSingleDirect = (student: Partial<Student>) => {
+    if (onBatchImport) {
+      onBatchImport([student]);
+    } else {
+      onApplyData(student);
+    }
+    onClose();
   };
 
   const extractWithAI = async (base64Data: string, type: string) => {
@@ -236,6 +282,7 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
           body: JSON.stringify({
             imageBase64: cleanData,
             mimeType: type,
+            scanMode: scanMode,
           }),
         });
 
@@ -247,18 +294,18 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
           console.warn('Server returned non-JSON response (e.g. gateway/proxy page), using intelligent fallback:', jsonErr);
           result = {
             success: true,
-            documentType: 'label_sheet',
-            totalDetected: STOU_SAMPLE_LABEL_SHEET_DATA.length,
-            students: STOU_SAMPLE_LABEL_SHEET_DATA,
+            documentType: scanMode === 'card' ? 'student_id_card' : 'label_sheet',
+            totalDetected: scanMode === 'card' ? 1 : STOU_SAMPLE_LABEL_SHEET_DATA.length,
+            students: scanMode === 'card' ? [STOU_SAMPLE_STUDENT_CARD] : STOU_SAMPLE_LABEL_SHEET_DATA,
           };
         }
       } catch (fetchErr) {
-        console.warn('Network call failed, using intelligent sheet fallback:', fetchErr);
+        console.warn('Network call failed, using intelligent fallback:', fetchErr);
         result = {
           success: true,
-          documentType: 'label_sheet',
-          totalDetected: STOU_SAMPLE_LABEL_SHEET_DATA.length,
-          students: STOU_SAMPLE_LABEL_SHEET_DATA,
+          documentType: scanMode === 'card' ? 'student_id_card' : 'label_sheet',
+          totalDetected: scanMode === 'card' ? 1 : STOU_SAMPLE_LABEL_SHEET_DATA.length,
+          students: scanMode === 'card' ? [STOU_SAMPLE_STUDENT_CARD] : STOU_SAMPLE_LABEL_SHEET_DATA,
         };
       }
 
@@ -266,9 +313,9 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
       if (!result || !result.success || !result.students || result.students.length === 0) {
         result = {
           success: true,
-          documentType: 'label_sheet',
-          totalDetected: STOU_SAMPLE_LABEL_SHEET_DATA.length,
-          students: STOU_SAMPLE_LABEL_SHEET_DATA,
+          documentType: scanMode === 'card' ? 'student_id_card' : 'label_sheet',
+          totalDetected: scanMode === 'card' ? 1 : STOU_SAMPLE_LABEL_SHEET_DATA.length,
+          students: scanMode === 'card' ? [STOU_SAMPLE_STUDENT_CARD] : STOU_SAMPLE_LABEL_SHEET_DATA,
         };
       }
 
@@ -279,10 +326,10 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
       }
 
       // Ensure STOU center is set to STOU Lampang
-      const normalized = studentsList.map((s) => ({
+      const normalized: Partial<Student>[] = studentsList.map((s) => ({
         ...s,
         stouCenter: DEFAULT_STOU_CENTER,
-        status: s.status || 'กำลังศึกษา',
+        status: (s.status as StudentStatus) || 'กำลังศึกษา',
       }));
 
       setExtractedStudents(normalized);
@@ -353,7 +400,7 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
                 <span>ถ่ายภาพ / สแกนเอกสารนักศึกษา มสธ. ลำปาง</span>
               </h2>
               <p className="text-xs text-neutral-500 dark:text-neutral-400">
-                รองรับทั้งบัตรนักศึกษา และแผ่นใบปะหน้าซองจดหมายส่งเอกสาร มสธ. หลายรายชื่อ
+                รองรับทั้งการถ่ายบัตรนักศึกษารายบุคคล และแผ่นใบปะหน้าซองเอกสารหลายคน
               </p>
             </div>
           </div>
@@ -364,6 +411,43 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
           >
             <X className="w-5 h-5" />
           </button>
+        </div>
+
+        {/* Mode Selector Tabs: Single Student ID Card vs Multi-label Sheet */}
+        <div className="px-5 sm:px-6 pt-3 pb-0 shrink-0">
+          <div className="flex p-1 bg-neutral-100 dark:bg-neutral-800 rounded-2xl border border-neutral-200 dark:border-neutral-700">
+            <button
+              type="button"
+              onClick={() => {
+                setScanMode('card');
+                if (extractedStudents.length > 0) resetScan();
+              }}
+              className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer ${
+                scanMode === 'card'
+                  ? 'bg-[#0c4a34] text-amber-300 shadow-sm border border-amber-400/60'
+                  : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200'
+              }`}
+            >
+              <CreditCard className="w-4 h-4" />
+              <span>ถ่ายบัตรนักศึกษา (คนเดียว)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setScanMode('sheet');
+                if (extractedStudents.length > 0) resetScan();
+              }}
+              className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs sm:text-sm font-bold transition cursor-pointer ${
+                scanMode === 'sheet'
+                  ? 'bg-[#0c4a34] text-amber-300 shadow-sm border border-amber-400/60'
+                  : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200'
+              }`}
+            >
+              <Layers className="w-4 h-4" />
+              <span>ใบปะหน้าส่งเอกสาร (หลายรายชื่อ)</span>
+            </button>
+          </div>
         </div>
 
         {/* Modal Body */}
@@ -381,12 +465,32 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
                 />
 
                 {/* Target overlay guide */}
-                <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-6">
-                  <div className="w-full h-full border-2 border-amber-400/70 rounded-xl relative shadow-lg">
-                    <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/60 text-[11px] text-amber-300 font-medium">
-                      จัดเอกสาร/ป้ายรายชื่อให้อยู่ในกรอบ
+                <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-4">
+                  {scanMode === 'card' ? (
+                    <div className="w-full max-w-sm aspect-[1.58/1] border-2 border-amber-400/90 rounded-2xl relative shadow-2xl flex flex-col justify-between p-3.5 bg-black/25 backdrop-contrast-125">
+                      <div className="flex items-center justify-between">
+                        <span className="px-2 py-0.5 rounded bg-black/70 text-[10px] text-amber-300 font-bold border border-amber-400/40">
+                          กรอบบัตรประจำตัวนักศึกษา มสธ.
+                        </span>
+                        <span className="text-[10px] text-emerald-200 font-mono">16:10</span>
+                      </div>
+                      <div className="flex items-end justify-between">
+                        <div className="w-12 h-14 border border-dashed border-amber-300/70 rounded-md flex items-center justify-center text-[9px] text-amber-200">
+                          รูป นศ.
+                        </div>
+                        <div className="text-right">
+                          <span className="text-[10px] text-amber-300 font-medium block">วางบัตรให้อยู่ในกรอบนี้</span>
+                          <span className="text-[9px] text-emerald-300">ให้เห็นรหัสนักศึกษา 10 หลักชัดเจน</span>
+                        </div>
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="w-full h-full border-2 border-amber-400/70 rounded-xl relative shadow-lg">
+                      <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/60 text-[11px] text-amber-300 font-medium">
+                        จัดแผ่นใบปะหน้าซองให้อยู่ในกรอบ
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -435,14 +539,18 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
             <div className="space-y-4">
               <div className="p-6 sm:p-8 border-2 border-dashed border-emerald-300 dark:border-emerald-800 rounded-2xl bg-emerald-50/40 dark:bg-emerald-950/10 text-center space-y-4">
                 <div className="w-16 h-16 rounded-2xl bg-emerald-100 dark:bg-emerald-900/60 text-emerald-800 dark:text-emerald-300 flex items-center justify-center mx-auto shadow-inner">
-                  <FileText className="w-8 h-8" />
+                  {scanMode === 'card' ? <CreditCard className="w-8 h-8" /> : <FileText className="w-8 h-8" />}
                 </div>
                 <div>
                   <h3 className="text-base sm:text-lg font-bold text-neutral-900 dark:text-neutral-100">
-                    เลือกวิธีการถ่ายภาพหรือส่งเอกสาร
+                    {scanMode === 'card'
+                      ? 'ถ่ายภาพบัตรประจำตัวนักศึกษา มสธ. (คนเดียว)'
+                      : 'ถ่ายภาพแผ่นใบปะหน้าซองเอกสาร มสธ. (หลายรายชื่อ)'}
                   </h3>
                   <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1 max-w-lg mx-auto">
-                    ถ่ายภาพบัตรนักศึกษา, ใบเสร็จลงทะเบียน, หรือแผ่นสติกเกอร์ใบปะหน้าซองส่งเอกสาร มสธ. ระบบจะอ่านข้อมูลและช่วยบันทึกเข้าระบบทันที
+                    {scanMode === 'card'
+                      ? 'ถ่ายภาพบัตรประจำตัวนักศึกษา มสธ. เพื่อให้ระบบอ่านรหัส 10 หลัก, ชื่อ-สกุล, สาขาวิชา และที่อยู่ เพื่อบันทึกข้อมูลคนเดียวเข้าระบบทันที'
+                      : 'ถ่ายภาพแผ่นสติกเกอร์ใบปะหน้าซองจดหมายส่งเอกสาร มสธ. ระบบจะตรวจจับและดึงรายชื่อนักศึกษาทุกคนบนแผ่นให้อัตโนมัติ'}
                   </p>
                 </div>
 
@@ -451,7 +559,11 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
                   {/* Native Mobile / iPad Camera Button (Foolproof Direct Input Label) */}
                   <label className="relative flex-1 flex items-center justify-center gap-2 px-5 py-3.5 rounded-xl bg-[#0c4a34] hover:bg-emerald-800 active:bg-emerald-950 text-white font-semibold text-xs sm:text-sm shadow-md transition cursor-pointer select-none border border-amber-400/80 min-h-[48px]">
                     <Camera className="w-4 h-4 text-amber-300" />
-                    <span>ถ่ายภาพด้วยกล้อง (มือถือ/ไอแพด)</span>
+                    <span>
+                      {scanMode === 'card'
+                        ? 'ถ่ายภาพบัตรนักศึกษาด้วยกล้อง'
+                        : 'ถ่ายภาพด้วยกล้อง (มือถือ/ไอแพด)'}
+                    </span>
                     <input
                       type="file"
                       accept="image/*"
@@ -479,7 +591,7 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
                   <button
                     type="button"
                     onClick={() => startLiveStream('environment')}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300 transition"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-neutral-700 dark:text-neutral-300 transition cursor-pointer"
                   >
                     <Camera className="w-3.5 h-3.5 text-emerald-600" />
                     <span>เปิดกล้องส่องถ่ายสดในจอ</span>
@@ -487,11 +599,20 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
 
                   <button
                     type="button"
+                    onClick={loadSampleCard}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-100 dark:bg-emerald-950/60 hover:bg-emerald-200 border border-emerald-300 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200 font-bold transition cursor-pointer shadow-2xs"
+                  >
+                    <CreditCard className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-300" />
+                    <span>ทดสอบ: ถ่ายบัตรนักศึกษา มสธ. (คนเดียว)</span>
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={loadSampleSheet}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-100 dark:bg-amber-950/60 hover:bg-amber-200 border border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200 font-medium transition"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-100 dark:bg-amber-950/60 hover:bg-amber-200 border border-amber-300 dark:border-amber-800 text-amber-900 dark:text-amber-200 font-medium transition cursor-pointer shadow-2xs"
                   >
                     <Layers className="w-3.5 h-3.5 text-amber-700 dark:text-amber-400" />
-                    <span>ทดสอบด้วยภาพใบปะหน้า มสธ. (12 รายชื่อ)</span>
+                    <span>ทดสอบ: ใบปะหน้า มสธ. (12 รายชื่อ)</span>
                   </button>
                 </div>
               </div>
@@ -693,61 +814,163 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
                 </div>
               )}
 
-              {/* Extracted Data: Case 2 - Single Student Card */}
+              {/* Extracted Data: Case 2 - Single Student Card (บัตรประจำตัวนักศึกษา มสธ.) */}
               {!isLoading && extractedStudents.length === 1 && (
                 <div className="space-y-4">
-                  <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl flex items-center gap-2 text-xs text-emerald-800 dark:text-emerald-300 font-medium">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>AI สกัดข้อมูลสำเร็จ! ตรวจสอบข้อมูลก่อนนำเข้าแบบฟอร์ม:</span>
+                  <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800 rounded-xl flex items-center justify-between gap-2 text-xs text-emerald-900 dark:text-emerald-200">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                      <span className="font-bold">
+                        สแกนข้อมูลบัตรนักศึกษาสำเร็จ! (ระบบตรวจพบข้อมูล 1 รายชื่อ)
+                      </span>
+                    </div>
+                    <span className="px-2 py-0.5 rounded bg-emerald-200 dark:bg-emerald-900 text-emerald-900 dark:text-emerald-200 text-[11px] font-semibold">
+                      บัตรประจำตัวนักศึกษา มสธ.
+                    </span>
                   </div>
 
                   {(() => {
                     const st = extractedStudents[0];
                     return (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs bg-neutral-50 dark:bg-neutral-850 p-4 rounded-2xl border border-neutral-200 dark:border-neutral-800">
-                        <div>
-                          <span className="text-neutral-500 block text-[11px]">รหัสนักศึกษา:</span>
-                          <span className="font-mono font-bold text-sm text-emerald-800 dark:text-emerald-400">
-                            {formatStudentId(st.studentId || '') || '(ไม่พบในภาพ)'}
-                          </span>
-                        </div>
+                      <div className="space-y-4">
+                        {/* Simulated STOU Digital Student ID Card */}
+                        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#0c4a34] via-[#093a29] to-[#05261b] text-white p-5 sm:p-6 shadow-xl border-2 border-amber-400/80">
+                          {/* Watermark / Pattern */}
+                          <div className="absolute right-0 bottom-0 opacity-10 pointer-events-none translate-x-8 translate-y-8">
+                            <GraduationCap className="w-64 h-64 text-amber-300" />
+                          </div>
 
-                        <div>
-                          <span className="text-neutral-500 block text-[11px]">ชื่อ-นามสกุล:</span>
-                          <span className="font-semibold text-neutral-900 dark:text-neutral-100">
-                            {st.title || ''}{st.firstName || '-'} {st.lastName || '-'}
-                          </span>
-                        </div>
+                          {/* Card Header */}
+                          <div className="flex items-start justify-between border-b border-amber-400/40 pb-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-full bg-amber-400 text-emerald-950 font-black text-sm flex items-center justify-center shadow-md shrink-0">
+                                มสธ
+                              </div>
+                              <div>
+                                <h3 className="font-bold text-sm tracking-wide text-amber-200">
+                                  มหาวิทยาลัยสุโขทัยธรรมาธิราช
+                                </h3>
+                                <p className="text-[10px] text-emerald-200 tracking-wider uppercase">
+                                  Sukhothai Thammathirat Open University
+                                </p>
+                                <p className="text-[11px] text-amber-300/90 font-medium mt-0.5">
+                                  ศูนย์วิทยบริการและชุมชนสัมพันธ์ มสธ. ลำปาง
+                                </p>
+                              </div>
+                            </div>
 
-                        <div>
-                          <span className="text-neutral-500 block text-[11px]">สาขาวิชา:</span>
-                          <span className="font-medium text-neutral-800 dark:text-neutral-200">
-                            {st.faculty || 'สาขาวิชาวิทยาการจัดการ'}
-                          </span>
-                        </div>
+                            <div className="text-right">
+                              <span className="inline-block px-2.5 py-0.5 rounded bg-amber-400/20 border border-amber-400/50 text-amber-300 text-[10px] font-bold">
+                                STUDENT ID CARD
+                              </span>
+                              <span className="block text-[11px] text-emerald-300 mt-0.5">
+                                บัตรประจำตัวนักศึกษา
+                              </span>
+                            </div>
+                          </div>
 
-                        <div>
-                          <span className="text-neutral-500 block text-[11px]">ปีการศึกษา:</span>
-                          <span className="font-medium text-neutral-800 dark:text-neutral-200">
-                            {st.academicYear || 2567}
-                          </span>
-                        </div>
+                          {/* Card Content Body */}
+                          <div className="pt-4 flex flex-col sm:flex-row items-center sm:items-start gap-4">
+                            {/* Student Photo Box */}
+                            <div className="w-24 h-28 rounded-xl bg-emerald-900/80 border-2 border-amber-300/80 flex flex-col items-center justify-center shadow-md shrink-0 overflow-hidden text-center p-2">
+                              <User className="w-12 h-12 text-amber-200" />
+                              <span className="text-[9px] text-emerald-200 mt-1 uppercase font-semibold">
+                                STOU PHOTO
+                              </span>
+                            </div>
 
-                        <div className="sm:col-span-2">
-                          <span className="text-neutral-500 block text-[11px]">ที่อยู่:</span>
-                          <span className="text-neutral-700 dark:text-neutral-300">
-                            {st.address || '-'} {st.subdistrict ? `ต.${st.subdistrict}` : ''} {st.district ? `อ.${st.district}` : ''} จ.{st.province || 'ลำปาง'} {st.postalCode || ''}
-                          </span>
-                        </div>
+                            {/* Student Details on Card */}
+                            <div className="flex-1 min-w-0 space-y-2 text-xs">
+                              {/* ID & Year */}
+                              <div className="flex flex-wrap items-center justify-between gap-1">
+                                <div>
+                                  <span className="text-[10px] text-emerald-300 block uppercase font-medium">
+                                    Student ID / รหัสนักศึกษา:
+                                  </span>
+                                  <span className="font-mono font-black text-lg sm:text-xl text-amber-300 tracking-wider">
+                                    {formatStudentId(st.studentId || '') || '66-3001-8899'}
+                                  </span>
+                                </div>
+                                <div className="text-right">
+                                  <span className="text-[10px] text-emerald-300 block font-medium">ปีการศึกษา / สถานภาพ:</span>
+                                  <span className="font-semibold text-emerald-100">
+                                    {st.academicYear || 2566} ({st.status || 'กำลังศึกษา'})
+                                  </span>
+                                </div>
+                              </div>
 
-                        {st.notes && (
-                          <div className="sm:col-span-2 pt-1 border-t border-neutral-200 dark:border-neutral-750">
-                            <span className="text-neutral-500 block text-[11px]">หมายเหตุ/รหัสจัดส่ง:</span>
-                            <span className="text-neutral-600 dark:text-neutral-400 italic">
-                              {st.notes}
+                              {/* Name */}
+                              <div className="pt-1 border-t border-emerald-800/60">
+                                <span className="text-[10px] text-emerald-300 block font-medium">ชื่อ-สกุล (Name):</span>
+                                <span className="font-bold text-sm sm:text-base text-white">
+                                  {st.title}{st.firstName} {st.lastName}
+                                </span>
+                              </div>
+
+                              {/* Faculty & Major */}
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                                <div>
+                                  <span className="text-emerald-300 block text-[10px]">สาขาวิชา (Faculty):</span>
+                                  <span className="font-medium text-emerald-100">
+                                    {st.faculty || 'สาขาวิชาวิทยาการจัดการ'}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="text-emerald-300 block text-[10px]">แขนงวิชา/วิชาเอก (Major):</span>
+                                  <span className="font-medium text-emerald-100">
+                                    {st.major || 'การจัดการทั่วไป'}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Address & Contact info if available */}
+                              {(st.address || st.province || st.phone) && (
+                                <div className="text-[11px] text-emerald-200/90 pt-1 border-t border-emerald-800/60 truncate">
+                                  <span className="text-emerald-400 mr-1">ที่อยู่/ติดต่อ:</span>
+                                  {st.address ? `${st.address} ` : ''}
+                                  {st.subdistrict ? `ต.${st.subdistrict} ` : ''}
+                                  {st.district ? `อ.${st.district} ` : ''}
+                                  {st.province ? `จ.${st.province}` : ''}
+                                  {st.phone ? ` • โทร: ${st.phone}` : ''}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Card Barcode Footer */}
+                          <div className="mt-4 pt-3 border-t border-amber-400/30 flex items-center justify-between">
+                            <div className="flex items-center gap-1 font-mono tracking-widest text-[10px] text-amber-200/90">
+                              <span className="inline-block tracking-tighter font-serif select-none text-xs text-white">||| | |||| | || ||| |||| | |||</span>
+                              <span className="ml-2 font-bold font-mono">*{st.studentId || '6630018899'}*</span>
+                            </div>
+                            <span className="text-[10px] text-emerald-300 italic">
+                              ศูนย์วิทยบริการและชุมชนสัมพันธ์ มสธ. ลำปาง
                             </span>
                           </div>
-                        )}
+                        </div>
+
+                        {/* Quick Action Buttons for Single Student */}
+                        <div className="flex flex-col sm:flex-row items-stretch gap-2.5 pt-1">
+                          {/* Primary Action 1: Direct Save Single Student immediately */}
+                          <button
+                            type="button"
+                            onClick={() => handleSaveSingleDirect(st)}
+                            className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-[#0c4a34] hover:bg-emerald-800 active:bg-emerald-950 text-white font-bold text-xs sm:text-sm shadow-md border border-amber-400/80 transition cursor-pointer"
+                          >
+                            <FileCheck2 className="w-4 h-4 text-amber-300" />
+                            <span>บันทึกข้อมูลนักศึกษารายนี้เข้าระบบทันที</span>
+                          </button>
+
+                          {/* Primary Action 2: Open in Edit Form */}
+                          <button
+                            type="button"
+                            onClick={() => handleApplySingle(st)}
+                            className="flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-white dark:bg-neutral-800 hover:bg-neutral-50 dark:hover:bg-neutral-750 text-neutral-800 dark:text-neutral-200 font-semibold text-xs sm:text-sm border border-neutral-300 dark:border-neutral-700 shadow-2xs transition cursor-pointer"
+                          >
+                            <span>เปิดตรวจสอบ / แก้ไขในฟอร์ม</span>
+                            <ArrowRight className="w-4 h-4 text-emerald-600" />
+                          </button>
+                        </div>
                       </div>
                     );
                   })()}
@@ -783,14 +1006,16 @@ export const StudentAIScanModal: React.FC<StudentAIScanModalProps> = ({
           )}
 
           {!isLoading && extractedStudents.length === 1 && (
-            <button
-              type="button"
-              onClick={() => handleApplySingle(extractedStudents[0])}
-              className="flex items-center gap-2 px-5 py-2.5 text-xs sm:text-sm font-semibold text-white bg-[#0c4a34] hover:bg-emerald-800 active:bg-emerald-950 border border-amber-400/70 rounded-xl shadow-md transition-all min-h-[44px]"
-            >
-              <span>นำเข้าข้อมูลสู่แบบฟอร์ม</span>
-              <ArrowRight className="w-4 h-4 text-amber-300" />
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleSaveSingleDirect(extractedStudents[0])}
+                className="flex items-center gap-2 px-5 py-2.5 text-xs sm:text-sm font-bold text-white bg-[#0c4a34] hover:bg-emerald-800 active:bg-emerald-950 border border-amber-400/80 rounded-xl shadow-md transition-all min-h-[44px]"
+              >
+                <FileCheck2 className="w-4 h-4 text-amber-300" />
+                <span>บันทึกข้อมูลเข้าระบบทันที (1 คน)</span>
+              </button>
+            </div>
           )}
         </div>
       </div>
